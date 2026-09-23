@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini LED 量子點電視 實境影像控光模擬器 v9</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #111111;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .control-panel {
+            margin-bottom: 20px;
+            text-align: center;
+            background: #222;
+            padding: 15px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            max-width: 750px;
+            width: 100%;
+        }
+        .input-group {
+            margin: 12px 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+        .input-group input[type="number"] {
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 6px 10px;
+            border-radius: 4px;
+            width: 100px;
+            font-size: 1rem;
+            text-align: center;
+        }
+        .btn-action {
+            background-color: #00766c;
+            color: white;
+            padding: 6px 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-action:hover { background-color: #009688; }
+        
+        .btn-upload {
+            background-color: #333;
+            border: 1px solid #555;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-block;
+            margin-top: 5px;
+            font-weight: bold;
+        }
+        .btn-upload:hover { background: #444; border-color: #777; }
+        input[type="file"] { display: none; }
+        
+        /* 16:9 電視主體 */
+        .tv-wrapper {
+            position: relative;
+            width: 85vw;
+            max-width: 1000px;
+            aspect-ratio: 16 / 9;
+            border: 12px solid #000000;
+            border-radius: 4px;
+            box-shadow: 0 25px 60px rgba(0,0,0,0.8);
+            background: #000;
+            overflow: hidden;
+        }
+        
+        /* 底層：實際載入的 JPG 圖片 */
+        #user-image {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+            transition: opacity 0.2s ease;
+        }
+        
+        /* 中層：物理網格 */
+        .grid-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: grid;
+            z-index: 3;
+            pointer-events: none;
+        }
+        
+        .zone-line {
+            border-right: 1px solid rgba(255, 255, 255, 0.25);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+        }
+        
+        /* 表層：模擬 Mini LED 控光層 */
+        #led-canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            mix-blend-mode: multiply; 
+            opacity: 0.94;
+        }
+        
+        .hide-image-mode {
+            mix-blend-mode: normal !important;
+            opacity: 1.0 !important;
+        }
+        
+        .ui-row {
+            margin-top: 12px;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            font-size: 0.9rem;
+            color: #ccc;
+        }
+        .status-badge {
+            color: #00ffcc;
+            font-weight: bold;
+            font-family: monospace;
+            font-size: 1.1rem;
+            margin-top: 5px;
+        }
+        .highlight-label {
+            color: #ffcc00;
+            font-weight: bold;
+        }
+        .opt-group {
+            border-left: 1px solid #444;
+            padding-left: 15px;
+            display: flex;
+            gap: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="control-panel">
+        <h2>Mini LED 實境控光模擬器</h2>
+        
+        <div class="input-group">
+            <label for="target-zones">輸入目標分區數：</label>
+            <input type="number" id="target-zones" value="1680" min="4" max="30000">
+            <button class="btn-action" id="btn-update-zones">重新劃分</button>
+        </div>
+
+        <div class="status-badge" id="matrix-display">計算中...</div>
+        
+        <div style="margin-top: 10px;">
+            <label class="btn-upload">
+                上傳測試圖片 (JPG / PNG)
+                <input type="file" id="image-loader" accept="image/*">
+            </label>
+        </div>
+        
+        <div class="ui-row">
+            <label><input type="checkbox" id="toggle-grid"> 顯示物理分區網格線</label>
+            <label><input type="checkbox" id="toggle-dimming" checked> 開啟 Local Dimming 模擬</label>
+            <label class="highlight-label"><input type="checkbox" id="toggle-hide-image"> 👁️ 隱藏測試圖片 (只看背光)</label>
+            
+            <div class="opt-group">
+                <label style="color: #00ffcc;"><input type="radio" name="backlight-mode" value="diffused" checked> 擴散均勻模式 (方塊光)</label>
+                <label style="color: #ff7700;"><input type="radio" name="backlight-mode" value="raw-led"> 原生燈珠模式 (圓點點陣)</label>
+            </div>
+        </div>
+    </div>
+
+    <div class="tv-wrapper">
+        <img id="user-image" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='9' viewBox='0 0 16 9'><rect width='16' height='9' fill='%230a0a0a'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%23444' font-size='1'>請上傳圖片進行測試</text></svg>">
+        <canvas id="led-canvas"></canvas>
+        <div class="grid-overlay" id="grid-layer"></div>
+    </div>
+
+    <script>
+        const imageLoader = document.getElementById('image-loader');
+        const userImage = document.getElementById('user-image');
+        const ledCanvas = document.getElementById('led-canvas');
+        const ctx = ledCanvas.getContext('2d');
+        const gridLayer = document.getElementById('grid-layer');
+        const toggleGrid = document.getElementById('toggle-grid');
+        const toggleDimming = document.getElementById('toggle-dimming');
+        const toggleHideImage = document.getElementById('toggle-hide-image');
+        const targetZonesInput = document.getElementById('target-zones');
+        const btnUpdateZones = document.getElementById('btn-update-zones');
+        const matrixDisplay = document.getElementById('matrix-display');
+        const backlightModes = document.getElementsByName('backlight-mode');
+
+        let COLS = 56;
+        let ROWS = 30;
+
+        function calculateBestMatrix(target) {
+            const targetRatio = 16 / 9;
+            let bestCols = 16;
+            let bestRows = 9;
+            let minError = Infinity;
+
+            for (let r = 1; r <= Math.sqrt(target * 3); r++) {
+                let c = Math.round(target / r);
+                if (c === 0) continue;
+                
+                let currentZones = c * r;
+                let currentRatio = c / r;
+                
+                let zoneError = Math.abs(currentZones - target) / target;
+                let ratioError = Math.abs(currentRatio - targetRatio) / targetRatio;
+                
+                if (currentZones === target) {
+                    zoneError = 0;
+                }
+
+                let totalError = (zoneError * 50.0) + ratioError;
+
+                if (totalError < minError) {
+                    minError = totalError;
+                    bestCols = c;
+                    bestRows = r;
+                }
+            }
+            return { cols: bestCols, rows: bestRows };
+        }
+
+        function updateGridDOM() {
+            gridLayer.innerHTML = '';
+            
+            const totalZones = COLS * ROWS;
+            matrixDisplay.textContent = `當前矩陣：${COLS} (橫向) × ${ROWS} (縱向) ＝ ${totalZones.toLocaleString()} 實際分區`;
+
+            if (!toggleGrid.checked) return;
+
+            gridLayer.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+            gridLayer.style.gridTemplateRows = `repeat(${ROWS}, 1fr)`;
+
+            const fragment = document.createDocumentFragment();
+            for (let i = 0; i < totalZones; i++) {
+                const div = document.createElement('div');
+                div.className = 'zone-line';
+                fragment.appendChild(div);
+            }
+            gridLayer.appendChild(fragment);
+        }
+
+        function handleGridRebuilt() {
+            let val = parseInt(targetZonesInput.value, 10);
+            if (isNaN(val) || val < 4) val = 1680;
+            if (val > 50000) val = 50000; 
+            
+            targetZonesInput.value = val;
+
+            const matrix = calculateBestMatrix(val);
+            COLS = matrix.cols;
+            ROWS = matrix.rows;
+
+            updateGridDOM();
+            runSimulation();
+        }
+
+        // 獲取當前選擇的背光模式
+        function getBacklightMode() {
+            for (const mode of backlightModes) {
+                if (mode.checked) return mode.value;
+            }
+            return 'diffused';
+        }
+
+        toggleGrid.addEventListener('change', () => {
+            updateGridDOM();
+            runSimulation();
+        });
+
+        toggleHideImage.addEventListener('change', () => {
+            if (toggleHideImage.checked) {
+                userImage.style.opacity = '0';
+                ledCanvas.classList.add('hide-image-mode');
+            } else {
+                userImage.style.opacity = '1';
+                ledCanvas.classList.remove('hide-image-mode');
+            }
+            runSimulation();
+        });
+
+        // 監聽模式切換
+        backlightModes.forEach(mode => {
+            mode.addEventListener('change', runSimulation);
+        });
+
+        btnUpdateZones.addEventListener('click', handleGridRebuilt);
+        targetZonesInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleGridRebuilt();
+        });
+
+        toggleDimming.addEventListener('change', runSimulation);
+
+        userImage.onload = function() {
+            ledCanvas.width = Math.floor(userImage.clientWidth);
+            ledCanvas.height = Math.floor(userImage.clientHeight);
+            runSimulation();
+        };
+
+        imageLoader.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    userImage.src = event.target.result;
+                };
+                reader.readAsDataURL(e.target.files[0]);
+            }
+        });
+
+        function runSimulation() {
+            const w = ledCanvas.width;
+            const h = ledCanvas.height;
+            if (w === 0 || h === 0) return;
+
+            const mode = getBacklightMode();
+
+            if (!toggleDimming.checked && !toggleHideImage.checked) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, w, h);
+                return;
+            }
+
+            const zoneW = w / COLS;
+            const zoneH = h / ROWS;
+
+            const tCanvas = document.createElement('canvas');
+            tCanvas.width = w; tCanvas.height = h;
+            const tCtx = tCanvas.getContext('2d');
+            tCtx.drawImage(userImage, 0, 0, w, h);
+
+            ctx.clearRect(0, 0, w, h);
+            
+            // 原生燈珠模式下，拔掉擴散板的背景更黑（接近全黑遮蔽狀態）
+            ctx.fillStyle = toggleHideImage.checked ? '#000000' : (mode === 'raw-led' ? '#020202' : '#0a0a0a'); 
+            ctx.fillRect(0, 0, w, h);
+
+            const sampleW = Math.max(1, zoneW / 2);
+            const sampleH = Math.max(1, zoneH / 2);
+
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const zX = Math.floor(c * zoneW);
+                    const zY = Math.floor(r * zoneH);
+
+                    const sX = Math.min(w - 1, Math.floor(c * zoneW + zoneW / 4));
+                    const sY = Math.min(h - 1, Math.floor(r * zoneH + zoneH / 4));
+
+                    try {
+                        const imgData = tCtx.getImageData(sX, sY, Math.max(1, Math.floor(sampleW)), Math.max(1, Math.floor(sampleH)));
+                        const data = imgData.data;
+                        let maxBrightness = 0;
+
+                        for (let i = 0; i < data.length; i += 16) {
+                            const brightness = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                            if (brightness > maxBrightness) maxBrightness = brightness;
+                        }
+
+                        let ledOutput;
+                        if (!toggleDimming.checked && toggleHideImage.checked) {
+                            ledOutput = 255;
+                        } else {
+                            ledOutput = maxBrightness < 15 ? 0 : Math.min(255, maxBrightness * 1.25);
+                        }
+                        
+                        // 分區中心點座標
+                        const centerX = zX + zoneW / 2;
+                        const centerY = zY + zoneH / 2;
+
+                        if (mode === 'raw-led') {
+                            // 【模式二：原生燈珠模式】➔ 繪製圓形高斯衰減點陣
+                            if (ledOutput > 0) {
+                                // 物理發光半徑：隨灰階深淺動態變化，最大不超過分區對角線的一半
+                                const maxRadius = Math.max(zoneW, zoneH) * 0.8;
+                                const currentRadius = maxRadius * (ledOutput / 255);
+                                
+                                if (currentRadius > 0) {
+                                    const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, currentRadius);
+                                    // 核心光學模擬：中心高爆發純白/高亮藍白，向外點陣化急速衰減
+                                    grad.addColorStop(0, `rgba(${ledOutput}, ${Math.min(255, ledOutput + 20)}, 255, 1)`);
+                                    grad.addColorStop(0.2, `rgba(${ledOutput}, ${ledOutput}, 255, 0.8)`);
+                                    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                                    
+                                    ctx.fillStyle = grad;
+                                    ctx.beginPath();
+                                    ctx.arc(centerX, centerY, currentRadius, 0, Math.PI * 2);
+                                    ctx.fill();
+                                }
+                            }
+                        } else {
+                            // 【模式一：傳統均勻擴散模式】➔ 標準 1px 無縫防漏光拼接方塊
+                            ctx.fillStyle = `rgb(${ledOutput}, ${ledOutput}, ${ledOutput})`;
+                            const drawW = Math.ceil(zoneW) + 1;
+                            const drawH = Math.ceil(zoneH) + 1;
+                            ctx.fillRect(zX, zY, drawW, drawH);
+                        }
+
+                    } catch(e) {
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(zX, zY, Math.ceil(zoneW), Math.ceil(zoneH));
+                    }
+                }
+            }
+        }
+
+        const initialMatrix = calculateBestMatrix(1680);
+        COLS = initialMatrix.cols;
+        ROWS = initialMatrix.rows;
+        updateGridDOM();
+
+        window.addEventListener('resize', () => {
+            ledCanvas.width = Math.floor(userImage.clientWidth);
+            ledCanvas.height = Math.floor(userImage.clientHeight);
+            runSimulation();
+        });
+    </script>
+</body>
+</html>
